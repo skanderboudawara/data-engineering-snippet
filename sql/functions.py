@@ -144,3 +144,178 @@ def extract_array_occurence(
         ),
         lambda x: x["compute_occurences"] == max_or_min_occurence
     ).tmp_array_of_working_columns
+
+def add_order_columns(
+    df: DataFrame,
+    priority_cols: dict
+) -> DataFrame:
+    """
+    - This function adds columns with the priority order of provided by the user (from higher to lower priority).
+    - For example: with priority_cols = {"col": [P, T, Z]} it will add a new column (named "{column_name}_priority") with 0 when "P", 1 when "T", and 2 when "Z".
+    - There can be more than one priority_cols.
+    - Istead of [priorisation_list] there can be the following string values:
+        - "min" or "max": create an auxiliary column (named "{column_name}_priority") with the same content as the column.
+        - "not_null": It creates a new column (named "{column_name}_priority") with 0 when not null, 1 when null.
+
+    :param df: (DataFrame), dataframe target
+
+    :param priority_cols: (dict(str)), {"column": [priorisation_list], "column": "max",...}. [priorisation_list] provides the priorty of the elements in "column".
+
+    :returns: (DataFrame), dataframe with modifications
+    """
+    if not isinstance(df, DataFrame):
+        raise TypeError("df must be a DataFrame")
+
+    if not isinstance(priority_cols, dict):
+        raise TypeError("priority_cols must be a dict")
+
+    columns_prio = priority_cols.keys()
+
+    for col_index in columns_prio:
+        if col_index not in df.columns:
+            raise ColumnIsMissing(f" {col_index} is not in df columns")
+
+    new_priority_cols = {}
+    # Find priority_cols with empty lists
+    for column, priorities in priority_cols.items():
+        if (priorities == "min") | (priorities == "max"):
+            df = df.withColumn(
+                f"{column}_priority",
+                col(column)
+            )
+        elif priorities == "not_null":
+            df = df.withColumn(
+                f"{column}_priority",
+                when(
+                    col(column).isNotNull(),
+                    lit("0").cast(StringType())
+                ).otherwise(lit("1").cast(StringType()))
+            )
+        else:
+            new_priority_cols[column] = priorities
+
+    cols_priority = []
+    # Treat each priority_col independently
+    for column, priority_list in new_priority_cols.items():
+
+        col_priority = f"{column}_priority"
+        cols_priority.append(col_priority)
+
+        # Create df with priorisation list
+        priorities = [
+            (value, priority) for priority, value in enumerate(priority_list)
+        ]
+
+        schema_priority = StructType([
+            StructField("_value_"   , StringType()),
+            StructField(col_priority, StringType()),
+        ])
+
+        data_priority = df.sql_ctx.createDataFrame(data=priorities, schema=schema_priority).cache()
+
+        # Join df to add new columns with priorisation
+        df = df.join(
+            broadcast(data_priority),
+            df[column].eqNullSafe(data_priority["_value_"]),
+            "left"
+        ).drop("_value_")
+
+    # The elements that are not part of the priorisation list are considered to be at the end of the priorisation
+    for column, col_priority in zip(new_priority_cols, cols_priority):
+        df = df.withColumn(
+            col_priority,
+            when(
+                col(col_priority).isNull(),
+                len(new_priority_cols[column])
+            ).otherwise(col(col_priority))
+        )
+
+    return df
+
+
+def select_rows_by_priority(
+    df: DataFrame,
+    partition_cols: Union[str, list],
+    priority_cols: dict,
+    keep: bool = True
+) -> DataFrame:
+    """
+    - Select the row with max priorisation (based on priority in priority_cols provied by the user) in a partition based on partition_cols.
+    - The priority_cols input shall be {"column": [priorisation_list], "column": "max",...}.
+    - The algorithm will consider the max of the combination of the differnt "column" in priority_cols.
+    - In case instead of [priorisation_list] there can be the following strings:
+        - "min" or "max": It will priorize min or max based on "column" content. It works with boths numbers and letters.
+        - "not_null": Priorizes non null values.
+
+    :param df: (DataFrame), dataframe target.
+
+    :param partition_cols: (list(str) or str), that contains the columns to apply partitionBy in a window.
+
+    :param priority_cols: (dict(str)), {"column": [priorisation_list], "column": "max",...}.. [priorisation_list] provides the priorty of the elements in "column".
+
+    :param keep: (bool, optional), True to keep selected lines and False to delete them. Default to True.
+
+    :returns: (DataFrame), dataframe with modifications
+    """
+    if not isinstance(df, DataFrame):
+        raise TypeError("df must be a DataFrame")
+
+    if not isinstance(priority_cols, dict):
+        raise TypeError("priority_cols must be a dict")
+
+    partition_cols = [partition_cols] if isinstance(partition_cols, str) else partition_cols
+
+    if not isinstance(partition_cols, list):
+        raise TypeError("partition_cols must be a list")
+
+    if not isinstance(keep, bool):
+        raise TypeError("keep must be a bool")
+
+    df_cols = df.columns
+
+    for col_index, prio_val in priority_cols.items():
+        if col_index not in df_cols:
+            raise ColumnIsMissing(f"Wrong Value: {col_index} in priority_cols is not in df columns")
+
+        if not isinstance(prio_val, (str, list)):
+            raise TypeError("prio_val must be a string or a list")
+
+        if isinstance(prio_val, str) and (prio_val not in ["min", "max", "not_null"]):
+            raise ValueError("only 'max, min, not_null' are accepted as string in prio_val")
+
+        if isinstance(prio_val, list) and (len(prio_val) <= 0):
+            raise ValueError("your list in priorisation must not be empty")
+
+    for col_index in partition_cols:
+        if col_index not in df_cols:
+            raise ColumnIsMissing(f"{col_index} in partition_cols is not in df columns")
+
+    # Create new columns with priority provided in priority_cols
+    df = add_order_columns(df, priority_cols)
+
+    prio_cols = []
+
+    # Create new columns with maximum of each "column" in priority_cols per partition
+    for column, priority in priority_cols.items():
+        col_priority = f"{column}_priority"
+
+        if priority == "max":
+            prio_cols.append(col(col_priority).desc())
+        else:  # We enter here if [priorisation_list] == "min" or "non_null" or when [priorisation_list].isNotNull()
+            prio_cols.append(col(col_priority).asc())
+
+    w = Window.partitionBy(*partition_cols).orderBy(*prio_cols)
+
+    mask_prio = col("_keep_") == lit(1) if keep else col("_keep_") > lit(1)
+
+    df = df.withColumn(
+        "_keep_",
+        dense_rank().over(w)
+    ).filter(
+        mask_prio
+    ).drop(
+        *[f"{c}_priority" for c in priority_cols.keys()],
+        "_keep_",
+    )
+
+    return df
