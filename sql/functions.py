@@ -299,3 +299,166 @@ def select_rows_by_priority(
     )
 
     return df
+
+def array_regexp_extract(
+    column_array: Union[str, Column],
+    regexp_pattern : str,
+    group_pattern : int = 0,
+    remove_none_and_empty_string : bool = True
+) -> Column:
+    """
+    This function performs an array regexp extract on each item of the array.
+    Default It will remove empty strings and extract group 0
+
+    :param column_array: (str or Column), column name that contains the array information.
+
+    :param regexp_pattern: (str), regexp expression in string
+
+    :param group_pattern: (int), group to extract. Default 0
+
+    :param remove_none_and_empty_string: (bool), boolean to remove None and empty strings. Default to True
+
+    :returns: (Column), array with extracted regexp
+    """
+    if not isinstance(column_array, (str, Column)):
+        raise TypeError("argument column_array must be a str or a Column")
+
+    if not isinstance(regexp_pattern, str):
+        raise TypeError("regexp_pattern must be a string")
+
+    if not isinstance(group_pattern, int):
+        raise TypeError("group_pattern must be a integer")
+
+    if not isinstance(remove_none_and_empty_string, bool):
+        raise TypeError("remove_none_and_empty_string must be a boolean")
+
+    column_array = column_array if isinstance(column_array, Column) else col(column_array)
+
+    array_regexp_extracted = transform_(
+        column_array,
+        lambda x : regexp_extract(x, regexp_pattern, group_pattern)
+    )
+
+    if remove_none_and_empty_string:
+        array_regexp_extracted = filter_(
+            array_regexp_extracted,
+            lambda y : (y.isNotNull() & (y != lit("")))
+        )
+
+    return when(
+        size(array_regexp_extracted) > lit(0),
+        array_regexp_extracted
+    ).otherwise(
+        lit(None)
+    )
+
+
+def array_regexp_filter(
+    column_array: Union[str, Column],
+    regexp_pattern : str,
+    remove_none_and_empty_string : bool = True,
+    rlike_ : bool = True
+) -> Column:
+    """
+    This function performs a filter on array to keep items respecting the regexp .
+    Default It will remove empty strings and extract group 0
+
+    :param column_array: (str or Column), column name that contains the array information.
+
+    :param regexp_pattern: (str), regexp expression in string
+
+    :param rlike_: (bool), if True will do an rlike if false will do not rlike. Default to True
+
+    :param remove_none_and_empty_string: (bool), boolean to remove None and empty strings. Default to True
+
+    :returns: (Column), array filtred with the regex
+    """
+
+    if not isinstance(column_array, (str, Column)):
+        raise TypeError("column_array must be a string or Column")
+
+    if not isinstance(regexp_pattern, str):
+        raise TypeError("regexp_pattern must be a string")
+
+    if not isinstance(remove_none_and_empty_string, bool):
+        raise TypeError("remove_none_and_empty_string must be a boolean")
+
+    if not isinstance(rlike_, bool):
+        raise TypeError("rlike_ must be a boolean")
+
+    column_array = column_array if isinstance(column_array, Column) else col(column_array)
+
+    def _custom_filter(col_w: Column, rlike_: bool, remove_none_and_empty_string: bool) -> Column:
+        """
+        This function will create the custom_filter
+
+        :param col_w: (Column), will contain the item of the array
+
+        :param rlike_: (bool), if True will do an rlike if false will do not rlike
+
+        :param remove_none_and_empty_string: (bool), boolean to remove None and empty strings
+
+        :returns: (Column), custom filter
+        """
+        mask_filter = col_w.rlike(regexp_pattern)
+        mask_filter = mask_filter if rlike_ else ~mask_filter
+        if remove_none_and_empty_string:
+            mask_filter = mask_filter & col_w.isNotNull() & (col_w != lit(""))
+        return mask_filter
+
+    array_regexp_extracted = filter_(
+        column_array,
+        lambda x : _custom_filter(x, rlike_, remove_none_and_empty_string)
+    )
+
+    return when(
+        size(array_regexp_extracted) > lit(0),
+        array_regexp_extracted
+    ).otherwise(
+        lit(None)
+    )
+
+
+def array_mean(
+    column_array: Union[str, Column],
+    apply_distinct_on_array : bool = False
+) -> Column:
+    """
+    This function will compute the mean of an array
+
+    :param column_array: (str or Column), column name that contains the array information.
+
+    :param apply_distinct_on_array: (bool), boolean to apply a distinct on an array or not Default to False
+
+    :returns: (Column), a value of the mean of the array
+    """
+
+    if not isinstance(column_array, (str, Column)):
+        raise TypeError("column_array must be a string or Column")
+
+    if not isinstance(apply_distinct_on_array, bool):
+        raise TypeError("apply_distinct_on_array must be a boolean")
+
+    column_array = column_array if isinstance(column_array, Column) else col(column_array)
+    column_of_work = array_distinct(column_array) if apply_distinct_on_array else column_array
+
+    def _count_and_sum(acc: Column, sum_: Column) -> Column:
+        """
+        This funciton will performs a sum_ and and an accumulation
+
+        :param acc: (Column(Struct)) containing count_ and sum_
+
+        :param sum_ : (Column) containing the sum
+
+        :returns: (Column(Struct))
+        """
+        count_ = acc.count_ + 1
+        sum_ = acc.sum_ + sum_
+        return struct(count_.alias("count_"), sum_.alias("sum_"))
+
+    return aggregate_(
+        column_of_work,
+        struct(lit(0).alias("count_"), lit(0.0).alias("sum_")),
+        _count_and_sum,
+        lambda acc: acc.sum_ / acc.count_,
+    )
