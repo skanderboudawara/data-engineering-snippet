@@ -9,6 +9,49 @@ class IllegalArgumentError(ValueError):
 class ColumnIsMissing(ValueError):
     """ColumnIsMissing"""
 
+def remove_left_zeros(
+    column: Union[str, Column],
+    number: int = 1
+) -> Column:
+    """
+    Remove the leading zeros for the given column
+
+    :param column: (str or Column), source column.
+
+    :param number: (int, optional), Delete 0s only if there are at least "number" (or more) 0. Default to 1.
+
+    :returns: (Column), Column w/o N left zeros.
+    """
+    if not isinstance(column, (str, Column)):
+        raise TypeError("column must be a str or a Column")
+    if not isinstance(number, int):
+        raise TypeError("number must be an Integer")
+
+    column = col(column) if isinstance(column, str) else column
+
+    # Finds left leading zeros (at least "number") -> https://regex101.com/r/OZBFUP/1
+    left_zeros_re = "^0{number,}".replace("number", str(number))
+
+    return regexp_replace(column, left_zeros_re, "")
+
+
+def remove_non_alphanumeric(
+    column: Union[str, Column],
+) -> Column:
+    """
+    Remove the non alphanumeric characters for the given column.
+
+    :param column: (str or Column), source column.
+
+    :returns: (Column), Column w/o alphanumeric values.
+    """
+    if not isinstance(column, (str, Column)):
+        raise TypeError("column must be a str or a Column")
+
+    column = col(column) if isinstance(column, str) else column
+
+    return regexp_replace(column, C.SPECIAL_CHARS, "")
+    
 def unpivot_table(
     self: DataFrame,
     pivot_key: Union[str, Column],
