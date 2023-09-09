@@ -1,18 +1,24 @@
 from typing import Union
-from pyspark.sql import DataFrame, Column
-from pyspark.sql.functions import expr, col, sort_array, transform_, when, lit, array_max, array_min, filter_, arrays_zip, broadcast, dense_rank
+
+from pyspark.sql import Column, DataFrame
+from pyspark.sql.functions import aggregate as aggregate_
+from pyspark.sql.functions import array_distinct, array_max, array_min, arrays_zip, broadcast, col, dense_rank, expr
+from pyspark.sql.functions import filter as filter_
+from pyspark.sql.functions import lit, regexp_extract, regexp_replace, size, sort_array, struct
+from pyspark.sql.functions import transform as transform_
+from pyspark.sql.functions import when
 from pyspark.sql.window import Window
+
 
 class IllegalArgumentError(ValueError):
     """IllegalArgumentError"""
 
+
 class ColumnIsMissing(ValueError):
     """ColumnIsMissing"""
 
-def remove_left_zeros(
-    column: Union[str, Column],
-    number: int = 1
-) -> Column:
+
+def remove_left_zeros(column: Union[str, Column], number: int = 1) -> Column:
     """
     Remove the leading zeros for the given column
 
@@ -50,8 +56,9 @@ def remove_non_alphanumeric(
 
     column = col(column) if isinstance(column, str) else column
 
-    return regexp_replace(column, C.SPECIAL_CHARS, "")
-    
+    return regexp_replace(column, r"[^A-Ba-b0-9]", "")
+
+
 def unpivot_table(
     self: DataFrame,
     pivot_key: Union[str, Column],
@@ -115,8 +122,10 @@ def unpivot_table(
 
     self = self.select(
         *pivot_key,
-        transform_(sort_array(transform_(col(column_to_unpivot), lambda y: transform_(col(column_to_unpivot), lambda x: when(x.between(y*(1-0.0), y*(1+0.0)), lit(1.0)).otherwise(lit(0.0))))), 
-        expr(unpivot_expr)
+        transform_(
+            sort_array(transform_(col(column_to_unpivot), lambda y: transform_(col(column_to_unpivot), lambda x: when(x.between(y * (1 - 0.0), y * (1 + 0.0)), lit(1.0)).otherwise(lit(0.0))))),
+            expr(unpivot_expr),
+        ),
     )
 
     return self
@@ -124,8 +133,8 @@ def unpivot_table(
 
 def extract_array_occurence(
     column_array: Union[str, Column],
-    tolerance_user : float = 0.0,
-    most_frequent : bool = True,
+    tolerance_user: float = 0.0,
+    most_frequent: bool = True,
 ) -> Column:
     if not isinstance(column_array, (str, Column)):
         raise TypeError("column_array must be a string or Column")
@@ -143,28 +152,17 @@ def extract_array_occurence(
     column_array = sort_array(column_array, False)
 
     compute_occurences = transform_(
-        column_array,
-        lambda y : array_max(transform_(
-            column_array,
-            lambda x: when(x.between(y*(1-tolerance_user), y*(1+tolerance_user)), lit(1.0)).otherwise(lit(0.0))
-        ))
+        column_array, lambda y: array_max(transform_(column_array, lambda x: when(x.between(y * (1 - tolerance_user), y * (1 + tolerance_user)), lit(1.0)).otherwise(lit(0.0))))
     )
 
     max_or_min_occurence = array_max(compute_occurences) if most_frequent else array_min(compute_occurences)
 
     return filter_(
-        arrays_zip(
-            column_array.alias("tmp_array_of_working_columns"),
-            compute_occurences.alias("compute_occurences")
-        ),
-        lambda x: x["compute_occurences"] == max_or_min_occurence
+        arrays_zip(column_array.alias("tmp_array_of_working_columns"), compute_occurences.alias("compute_occurences")), lambda x: x["compute_occurences"] == max_or_min_occurence
     ).tmp_array_of_working_columns
 
 
-def add_order_columns(
-    df: DataFrame,
-    priority_cols: dict
-) -> DataFrame:
+def add_order_columns(df: DataFrame, priority_cols: dict) -> DataFrame:
     """
     Adds columns with the priority order provided by the user to the DataFrame.
 
@@ -203,63 +201,38 @@ def add_order_columns(
 
     for column, priorities in priority_cols.items():
         if (priorities == "min") | (priorities == "max"):
-            df = df.withColumn(
-                f"{column}_priority",
-                col(column)
-            )
+            df = df.withColumn(f"{column}_priority", col(column))
         elif priorities == "not_null":
-            df = df.withColumn(
-                f"{column}_priority",
-                when(
-                    col(column).isNotNull(),
-                    lit("0").cast("string")
-                ).otherwise(lit("1").cast("string"))
-            )
+            df = df.withColumn(f"{column}_priority", when(col(column).isNotNull(), lit("0").cast("string")).otherwise(lit("1").cast("string")))
         else:
             new_priority_cols[column] = priorities
 
     cols_priority = []
 
     for column, priority_list in new_priority_cols.items():
-
         col_priority = f"{column}_priority"
         cols_priority.append(col_priority)
 
-        priorities = [
-            (value, priority) for priority, value in enumerate(priority_list)
-        ]
+        priorities = [(value, priority) for priority, value in enumerate(priority_list)]
 
-        schema_priority = StructType([
-            StructField("_value_"   , StringType()),
-            StructField(col_priority, StringType()),
-        ])
+        schema_priority = StructType(
+            [
+                StructField("_value_", StringType()),
+                StructField(col_priority, StringType()),
+            ]
+        )
 
         data_priority = df.sql_ctx.createDataFrame(data=priorities, schema=schema_priority).cache()
 
-        df = df.join(
-            broadcast(data_priority),
-            df[column].eqNullSafe(data_priority["_value_"]),
-            "left"
-        ).drop("_value_")
+        df = df.join(broadcast(data_priority), df[column].eqNullSafe(data_priority["_value_"]), "left").drop("_value_")
 
     for column, col_priority in zip(new_priority_cols, cols_priority):
-        df = df.withColumn(
-            col_priority,
-            when(
-                col(col_priority).isNull(),
-                len(new_priority_cols[column])
-            ).otherwise(col(col_priority))
-        )
+        df = df.withColumn(col_priority, when(col(col_priority).isNull(), len(new_priority_cols[column])).otherwise(col(col_priority)))
 
     return df
 
 
-def select_rows_by_priority(
-    df: DataFrame,
-    partition_cols: Union[str, list],
-    priority_cols: dict,
-    keep: bool = True
-) -> DataFrame:
+def select_rows_by_priority(df: DataFrame, partition_cols: Union[str, list], priority_cols: dict, keep: bool = True) -> DataFrame:
     """
     Selects rows from a DataFrame based on the specified priority order within each partition.
 
@@ -335,20 +308,12 @@ def select_rows_by_priority(
 
     mask_prio = col("_keep_") == lit(1) if keep else col("_keep_") > lit(1)
 
-    df = (
-        df.withColumn("_keep_", dense_rank().over(w))
-        .filter(mask_prio)
-        .drop(*[f"{c}_priority" for c in priority_cols], "_keep_")
-    )
+    df = df.withColumn("_keep_", dense_rank().over(w)).filter(mask_prio).drop(*[f"{c}_priority" for c in priority_cols], "_keep_")
 
     return df
 
-def array_regexp_extract(
-    column_array: Union[str, Column],
-    regexp_pattern : str,
-    group_pattern : int = 0,
-    remove_none_and_empty_string : bool = True
-) -> Column:
+
+def array_regexp_extract(column_array: Union[str, Column], regexp_pattern: str, group_pattern: int = 0, remove_none_and_empty_string: bool = True) -> Column:
     """
     This function performs an array regexp extract on each item of the array.
     Default It will remove empty strings and extract group 0
@@ -377,31 +342,15 @@ def array_regexp_extract(
 
     column_array = column_array if isinstance(column_array, Column) else col(column_array)
 
-    array_regexp_extracted = transform_(
-        column_array,
-        lambda x : regexp_extract(x, regexp_pattern, group_pattern)
-    )
+    array_regexp_extracted = transform_(column_array, lambda x: regexp_extract(x, regexp_pattern, group_pattern))
 
     if remove_none_and_empty_string:
-        array_regexp_extracted = filter_(
-            array_regexp_extracted,
-            lambda y : (y.isNotNull() & (y != lit("")))
-        )
+        array_regexp_extracted = filter_(array_regexp_extracted, lambda y: (y.isNotNull() & (y != lit(""))))
 
-    return when(
-        size(array_regexp_extracted) > lit(0),
-        array_regexp_extracted
-    ).otherwise(
-        lit(None)
-    )
+    return when(size(array_regexp_extracted) > lit(0), array_regexp_extracted).otherwise(lit(None))
 
 
-def array_regexp_filter(
-    column_array: Union[str, Column],
-    regexp_pattern : str,
-    remove_none_and_empty_string : bool = True,
-    rlike_ : bool = True
-) -> Column:
+def array_regexp_filter(column_array: Union[str, Column], regexp_pattern: str, remove_none_and_empty_string: bool = True, rlike_: bool = True) -> Column:
     """
     This function performs a filter on array to keep items respecting the regexp .
     Default It will remove empty strings and extract group 0
@@ -449,23 +398,12 @@ def array_regexp_filter(
             mask_filter = mask_filter & col_w.isNotNull() & (col_w != lit(""))
         return mask_filter
 
-    array_regexp_extracted = filter_(
-        column_array,
-        lambda x : _custom_filter(x, rlike_, remove_none_and_empty_string)
-    )
+    array_regexp_extracted = filter_(column_array, lambda x: _custom_filter(x, rlike_, remove_none_and_empty_string))
 
-    return when(
-        size(array_regexp_extracted) > lit(0),
-        array_regexp_extracted
-    ).otherwise(
-        lit(None)
-    )
+    return when(size(array_regexp_extracted) > lit(0), array_regexp_extracted).otherwise(lit(None))
 
 
-def array_mean(
-    column_array: Union[str, Column],
-    apply_distinct_on_array : bool = False
-) -> Column:
+def array_mean(column_array: Union[str, Column], apply_distinct_on_array: bool = False) -> Column:
     """
     This function will compute the mean of an array
 

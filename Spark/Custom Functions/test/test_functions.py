@@ -1,7 +1,7 @@
 import pytest
 from pyspark.sql import DataFrame
 from pyspark.sql.functions import ColumnIsMissing, add_order_columns, array_max, array_min, arrays_zip, col, expr, filter_, lit, sort_array, transform_, when
-from pyspark_custom_functions.sql.functions import add_order_columns, extract_array_occurence, unpivot_table
+from pyspark_custom_functions.sql.functions import IllegalArgumentError, add_order_columns, extract_array_occurence, unpivot_table
 
 
 @pytest.fixture
