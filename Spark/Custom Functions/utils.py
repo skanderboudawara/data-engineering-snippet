@@ -1,6 +1,6 @@
 from typing import Union
 from pyspark.sql import DataFrame, Column
-from pyspark.sql.functions import col, sort_array, transform_, when, lit, array_max, array_min, filter_, arrays_zip, broadcast, dense_rank
+from pyspark.sql.functions import expr, col, sort_array, transform_, when, lit, array_max, array_min, filter_, arrays_zip, broadcast, dense_rank
 from pyspark.sql.window import Window
 
 class IllegalArgumentError(ValueError):

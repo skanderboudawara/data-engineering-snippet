@@ -1,0 +1,61 @@
+version: "3.8"
+name: local_project_aws_env
+services:
+  postgres_aws:
+    image: "postgres:14.8"
+    container_name: postgres_aws
+    # automatically restarts the container - Docker daemon on restart or 
+    # the container itself is manually restarted
+    restart: always 
+    volumes:
+      - ./source_data/csv_data:/var/lib/postgresql/data
+      - ./database:/var/lib/postgresql/script
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: pwd
+      # POSTGRES_DB: project
+      PGDATA: /var/lib/postgresql/data_aws
+    ports:
+      - "5432:5432" 
+    networks:
+      project_aws:
+        ipv4_address: "192.168.92.22"
+  pgadmin_aws:
+    # Image of the second service to launch
+    container_name: pgadmin4_aws
+    image: dpage/pgadmin4
+    restart: always
+    depends_on:
+      - postgres_aws
+    ports:
+      - "5050:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: user@user.com
+      PGADMIN_DEFAULT_PASSWORD: pwd
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQURED: "False"
+      # PGADMIN_CONFIG_SERVER_MODE: 'False'
+    volumes:
+      - ./source_data/pgadmin:/var/lib/pgadmin
+      - ./source_data/csv_data:/var/lib/pgadmin/storage/user_user.com/csv
+      - ./database:/var/lib/pgadmin/storage/user_user.com/script
+    networks:
+      project_aws:
+        ipv4_address: "192.168.92.21"
+  front_end_app:
+    container_name: front_end_app
+    image: nginx:alpine
+    restart: always
+    ports:
+      - "8080:80"
+    volumes:
+      - ./front:/usr/share/nginx/html
+    networks:
+      project_aws:
+        ipv4_address: "192.168.92.23"
+networks:
+  project_aws:
+    ipam:
+      driver: default
+      config:
+        - subnet: "192.168.92.0/24"
+          gateway: "192.168.92.1"
