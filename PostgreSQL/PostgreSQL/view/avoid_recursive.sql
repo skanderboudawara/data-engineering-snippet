@@ -45,3 +45,6 @@ WITH RECURSIVE all_links(
 )
 SELECT *
 FROM all_links
+
+ALTER TABLE your_table
+  ADD CONSTRAINT "father" CHECK (father <> 'C');
