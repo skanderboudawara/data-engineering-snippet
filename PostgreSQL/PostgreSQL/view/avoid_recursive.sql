@@ -46,5 +46,6 @@ WITH RECURSIVE all_links(
 SELECT *
 FROM all_links
 
+-- https://www.postgresql.org/docs/current/ddl-constraints.html
 ALTER TABLE your_table
   ADD CONSTRAINT "father" CHECK (father <> 'C');
