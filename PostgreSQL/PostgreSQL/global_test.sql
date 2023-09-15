@@ -6,8 +6,8 @@ CREATE SCHEMA IF NOT EXISTS test_aws AUTHORIZATION postgres;
 ------------------------------------------------------------------------------
 DROP TABLE IF EXISTS test_aws.t00_test_table;
 CREATE TABLE test_aws.t00_test_table (
-    father 			CHARACTER VARYING
-    , child       	CHARACTER VARYING
+    	father 		CHARACTER VARYING
+   	, child       	CHARACTER VARYING
 	, item_number 	CHARACTER VARYING
 );
 
